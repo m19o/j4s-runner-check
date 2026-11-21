@@ -1,0 +1,34 @@
+name: VBMI Detailed Check
+on: [workflow_dispatch]
+
+jobs:
+  vbmi:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exact VBMI flags
+        run: |
+          echo "=== ALL avx512 flags (exact) ==="
+          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep "^avx512" | sort
+          echo ""
+          echo "=== Checking for the specific flag: avx512_vbmi ==="
+          if grep -m1 '^flags' /proc/cpuinfo | grep -q "avx512_vbmi "; then
+            echo "avx512_vbmi: PRESENT"
+          elif grep -m1 '^flags' /proc/cpuinfo | grep -q "avx512_vbmi2 "; then
+            echo "avx512_vbmi2: PRESENT (but need original vbmi for CVE-2026-114938)"
+            # Check if both are present
+            if grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -x "avx512_vbmi"; then
+              echo "avx512_vbmi (exact match): PRESENT"
+            else
+              echo "avx512_vbmi (exact match): ABSENT — vbmi2 only, original vbmi missing"
+            fi
+          else
+            echo "avx512_vbmi: ABSENT"
+          fi
+          echo ""
+          echo "=== Full flags (unfiltered, for reference) ==="
+          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | wc -l
+          echo "total flags"
+          echo ""
+          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -x "avx512_vbmi" || echo "avx512_vbmi: NOT FOUND (exact match)"
+          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -x "avx512_vbmi2" || echo "avx512_vbmi2: NOT FOUND (exact match)"
+          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -x "avx512f" || echo "avx512f: NOT FOUND"
