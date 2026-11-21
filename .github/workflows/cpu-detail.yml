@@ -1,0 +1,25 @@
+name: CPU Detail Check
+on: [workflow_dispatch]
+
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Full CPU info
+        run: |
+          echo "=== /proc/cpuinfo model ==="
+          grep -m1 "model name" /proc/cpuinfo
+          echo ""
+          echo "=== ALL AVX/BMI flags ==="
+          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -E "avx|bmi|vaes|gfni" | sort
+          echo ""
+          echo "=== CPU vendor/model ==="
+          grep -m1 "vendor_id" /proc/cpuinfo
+          grep -m1 "cpu family" /proc/cpuinfo
+          grep -m1 "model:" /proc/cpuinfo
+          echo ""
+          echo "=== Runner hostname (instance type hint) ==="
+          hostname
+          echo ""
+          echo "=== Check for AVX-512 with more detail ==="
+          grep -m1 '^flags' /proc/cpuinfo | grep -o "avx512[a-z_]*" | sort || echo "NO AVX-512"
