@@ -1,0 +1,48 @@
+name: Pool sample (6 runners)
+on: [workflow_dispatch]
+
+jobs:
+  sample:
+    strategy:
+      matrix:
+        n: [1, 2, 3, 4, 5, 6]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21.0.13'
+      - name: CPU + flags + PoC (same runner)
+        run: |
+          MODEL=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
+          FLAGS=$(grep -m1 '^flags' /proc/cpuinfo)
+          echo "MODEL=$MODEL"
+          for f in avx512f avx512bw avx512vbmi avx512_vbmi2 bmi2; do
+            if echo "$FLAGS" | tr ' ' '\n' | grep -qx "$f"; then echo "$f=yes"; else echo "$f=NO"; fi
+          done
+          cat > P.java <<'JAVA'
+          import java.util.Base64;
+          public class P {
+            static volatile int sink;
+            public static void main(String[] a) {
+              Base64.Decoder dec = Base64.getDecoder();
+              byte[] valid = new byte[64];
+              for (int i = 0; i < 64; i++) valid[i] = 65;
+              byte[] t = new byte[4096];
+              for (int i = 0; i < 500000; i++) sink += dec.decode(valid, t);
+              byte[] bad = new byte[65];
+              for (int i = 0; i < 64; i++) bad[i] = 65;
+              bad[64] = 61;
+              boolean rej = false;
+              try { dec.decode(bad, t); } catch (IllegalArgumentException e) { rej = true; }
+              int v = 3 * 64 / 4 + 2;
+              int changed = 0, first = -1;
+              for (int i = v; i < t.length; i++)
+                if (t[i] != 0) { changed++; if (first < 0) first = i; }
+              System.out.println("RESULT changed=" + changed + " first=" + first + " rejected=" + rej);
+            }
+          }
+          JAVA
+          javac P.java
+          java -XX:-TieredCompilation -XX:-BackgroundCompilation P
